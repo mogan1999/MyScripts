@@ -1,0 +1,85 @@
+{
+  "domainStrategy": "AsIs",
+  "rules": [
+        {
+            "type": "field",
+            "outboundTag": "block",
+            "port": "25,465,587"
+        },
+        {
+        "type": "field",
+        "outboundTag": "IPv4_out",
+        "domain": [
+            "gstatic.com",
+            "tiktok.com",
+            "tiktokcdn.com",
+            "tiktokv.com",
+            "ibytedtos.com",
+            "services.googleapis.cn"
+        ]
+        },
+        {
+            "type": "field",
+            "outboundTag": "block",
+            "ip": [
+                "geoip:private",
+                "geoip:cn"
+            ]
+        },
+        {
+            "type": "field",
+            "outboundTag": "block",
+            "protocol": [
+                "bittorrent"
+            ]
+        },
+        {
+            "type": "field",
+            "outboundTag": "block",
+            "domain": [
+                "geosite:cn",
+                "geosite:category-ads-all",
+                "sentry.io",
+                "baidu.com",
+                "qq.com",
+                "gov.cn",
+                "mil.cn",
+                "org.cn",
+                "edu.cn",
+                "falundafa.org",
+                "hidden-advent.org",
+                "kingdomsalvation.org",
+                "unification.org.tw",
+                "hsintao.org",
+                "bitterwinter.org",
+                "tbsn.org",
+                "chineseapologetics.net",
+                "anticommunism.miraheze.org",
+                "godcom.net",
+                "browser.events.data.msn.com",
+                "confiant.msn.com",
+                "assets.msn.cn",
+                "assets.msn.com",
+                "c.msn.com",
+                "web.vortex.data.microsoft.cn",
+                "ntp.msn.cn",
+                "pipe.aria.microsoft.cn",
+                "www.msn.com",
+                "www.msn.cn",
+                "browser.events.data.msn.cn",
+                "events.data.microsoft.com"
+            ]
+        },
+        {
+        "type": "field",
+        "outboundTag": "IPv4_out",
+        "network": "udp,tcp"
+        },
+        {
+        "type": "field",
+        "outboundTag": "IPv6_out",
+        "network": "udp,tcp"
+        }
+  ]
+}
+
