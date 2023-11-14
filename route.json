@@ -71,7 +71,12 @@
                 "browser.events.data.msn.cn",
                 "events.data.microsoft.com",
                 "234456.xyz",
-                "9.234456.xyz"
+                "9.234456.xyz",
+                "www.microsoft.com",
+                "api.msn.com",
+                "pipe.aria.microsoft.com",
+                "pipe.aria.microsoft.cn",
+                "api.msn.cn"
             ]
         },
         {
