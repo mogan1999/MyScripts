@@ -13,7 +13,7 @@ if [ ! -f "/etc/XrayR/config.yml" ]; then
 fi
 
 # 使用sed命令替换字符串
-sed -i 's/showshowway.top/ssw.one/g' /etc/XrayR/config.yml
+sed -i 's/showshowway.top/api.ssw.one/g' /etc/XrayR/config.yml
 
 # 输出替换结果
 echo "Replacement done."
