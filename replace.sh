@@ -13,7 +13,7 @@ if [ ! -f "/etc/XrayR/config.yml" ]; then
 fi
 
 # 使用sed命令替换字符串
-sed -i 's/SpeedLimit: 150/SpeedLimit: 120/g' /etc/XrayR/config.yml &&
-sed -i 's/SpeedLimit: 50/SpeedLimit: 60/g' /etc/XrayR/config.yml 
+sed -i 's/SpeedLimit: 120/SpeedLimit: 160/g' /etc/XrayR/config.yml &&
+sed -i 's/SpeedLimit: 60/SpeedLimit: 64/g' /etc/XrayR/config.yml 
 # 输出替换结果
 echo "Replacement done."
