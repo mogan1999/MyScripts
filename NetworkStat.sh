@@ -6,7 +6,8 @@ INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n 1)
 # 使用vnstat获取本月流量数据
 # -i 指定网络接口
 # --oneline 输出单行格式
-OUTPUT=$(vnstat -i $INTERFACE --oneline | awk -F ";" '{print $10, $11}')
+# -m 获取月度报告
+OUTPUT=$(vnstat -i $INTERFACE -m --oneline | awk -F ";" '{print $10, $11}')
 
 # 提取入站和出站流量数值和单位
 RX_VALUE=$(echo $OUTPUT | awk '{print $1}')
