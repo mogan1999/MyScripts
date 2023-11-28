@@ -10,6 +10,7 @@
         "type": "field",
         "outboundTag": "IPv4_out",
         "domain": [
+            "hoyoverse.com",
             "gstatic.com",
             "tiktok.com",
             "tiktokcdn.com",
