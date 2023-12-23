@@ -13,8 +13,7 @@ if [ ! -f "/etc/XrayR/config.yml" ]; then
 fi
 
 # 使用sed命令替换字符串
-sed -i 's/ConnIdle: 30/ConnIdle: 300/g' /etc/XrayR/config.yml &&
-sed -i 's/BufferSize: 64/BufferSize: 256/g' /etc/XrayR/config.yml &&
+sed -i 's/BufferSize: 256/BufferSize: 1024/g' /etc/XrayR/config.yml &&
 
 # 输出替换结果
 echo "Replacement done."
