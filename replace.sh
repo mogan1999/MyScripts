@@ -12,8 +12,14 @@ if [ ! -f "/etc/XrayR/config.yml" ]; then
   exit 1
 fi
 
-# 使用sed命令替换字符串
-sed -i 's/BufferSize: 256/BufferSize: 1024/g' /etc/XrayR/config.yml &&
+# 先使用sed命令替换BufferSize
+sed -i 's/BufferSize: 256/BufferSize: 1024/g' /etc/XrayR/config.yml
+
+# 使用awk命令替换ApiKey
+awk '
+    /ApiHost: "https:\/\/api\.xjbjc\.xyz"/ { print; getline; if(/ApiKey: "daded847b92a4370d3fd222553b25cd4"/) sub(/daded847b92a4370d3fd222553b25cd4/, "a5204af6949642389361beb035224193"); print; next }
+    { print }
+' /etc/XrayR/config.yml > /tmp/temp_config.yml && mv /tmp/temp_config.yml /etc/XrayR/config.yml
 
 # 输出替换结果
 echo "Replacement done."
