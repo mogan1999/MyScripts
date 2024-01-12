@@ -17,7 +17,7 @@ sed -i 's/BufferSize: 256/BufferSize: 1024/g' /etc/XrayR/config.yml
 
 # 使用awk命令替换ApiKey
 awk '
-    /ApiHost: "https:\/\/api\.xjbjc\.xyz"/ { print; getline; if(/ApiKey: "daded847b92a4370d3fd222553b25cd4"/) sub(/daded847b92a4370d3fd222553b25cd4/, "a5204af6949642389361beb035224193"); print; next }
+    /ApiHost: "https:\/\/api\.xjbjc\.xyz"/ { print; getline; if(/ApiKey: "daded8123370d3fd222553b25cd4"/) sub(/daded847b92a437123122553b25cd4/, "a5204af694964241beb035224193"); print; next }
     { print }
 ' /etc/XrayR/config.yml > /tmp/temp_config.yml && mv /tmp/temp_config.yml /etc/XrayR/config.yml
 
