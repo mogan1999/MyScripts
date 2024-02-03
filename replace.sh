@@ -12,9 +12,10 @@ if [ ! -f "/etc/XrayR/config.yml" ]; then
   exit 1
 fi
 
-# 先使用sed命令替换BufferSize
-sed -i 's/SpeedLimit: 0/SpeedLimit: 120/g' /etc/XrayR/config.yml
-
-
+# 先使用sed命令替换
+sed -i 's/Limit: 0 # Warned speed/Limit: 150 # Warned speed/g' /etc/XrayR/config.yml
+sed -i 's/WarnTimes: 0/WarnTimes: 5/g' /etc/XrayR/config.yml
+sed -i 's/LimitSpeed: 0/LimitSpeed: 64/g' /etc/XrayR/config.yml
+sed -i 's/LimitDuration: 0/LimitDuration: 10/g' /etc/XrayR/config.yml
 # 输出替换结果
 echo "Replacement done."
