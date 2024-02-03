@@ -13,10 +13,7 @@ if [ ! -f "/etc/XrayR/config.yml" ]; then
 fi
 
 # 先使用sed命令替换
-sed -i 's/Limit: 150 # Warned speed/Limit: 0 # Warned speed/g' /etc/XrayR/config.yml
-sed -i 's/WarnTimes: 5/WarnTimes: 0/g' /etc/XrayR/config.yml
-sed -i 's/LimitSpeed: 64/LimitSpeed: 0/g' /etc/XrayR/config.yml
-sed -i 's/LimitDuration: 10/LimitDuration: 0/g' /etc/XrayR/config.yml
 sed -i 's/SpeedLimit: 0/SpeedLimit: 160/g' /etc/XrayR/config.yml
+
 # 输出替换结果
 echo "Replacement done."
