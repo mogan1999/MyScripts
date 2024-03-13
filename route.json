@@ -4,7 +4,7 @@
         {
             "type": "field",
             "outboundTag": "block",
-            "port": "25,465,587"
+            "port": "25"
         },
         {
         "type": "field",
