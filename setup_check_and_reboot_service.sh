@@ -14,7 +14,7 @@ chmod +x ${SCRIPT_PATH}
 cat <<EOF >${SERVICE_PATH}
 [Unit]
 Description=Check network connection and reboot on failure
-After=network.target
+After=network.target wg-quick@warp.service
 
 [Service]
 Type=oneshot
