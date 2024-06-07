@@ -31,8 +31,8 @@ systemctl restart haproxy
 # 检查HAProxy服务状态
 echo "检查HAProxy服务状态..."
 systemctl status haproxy
-
+systemctl enable haproxy
 # 打印成功消息
-echo "HAProxy已成功安装并配置。"
+echo "HAProxy已成功安装并配置开启启动。"
 
 exit 0
