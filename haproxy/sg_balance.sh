@@ -12,7 +12,7 @@ apt-get update
 apt-get install -y haproxy
 
 # 下载配置文件
-CONFIG_URL="https://raw.githubusercontent.com/mogan1999/MyScripts/master/sg_haproxy.cfg"
+CONFIG_URL="https://raw.githubusercontent.com/mogan1999/MyScripts/master/haproxy/sg_haproxy.cfg"
 CONFIG_PATH="/etc/haproxy/haproxy.cfg"
 
 echo "下载配置文件到 ${CONFIG_PATH}..."
