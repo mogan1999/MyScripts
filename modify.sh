@@ -16,7 +16,7 @@ if [ ! -f "$SERVICE_FILE" ]; then
 fi
 
 # 使用sed命令替换字符串
-sed -i 's/monitor.1.fun/status.2.fun/g' $SERVICE_FILE
+sed -i 's/status.mogan.fun/status.999420.xyz/g' $SERVICE_FILE
 
 # 执行daemon-reload
 systemctl daemon-reload
