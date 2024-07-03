@@ -18,7 +18,7 @@
               "regexp:(.?)(xunlei|sandai|Thunder|XLLiveUD)(.)",
               "regexp:(..||)(dafahao|mingjinglive|botanwang|minghui|dongtaiwang|falunaz|epochtimes|ntdtv|falundafa|falungong|wujieliulan|zhengjian).(org|com|net)",
               "regexp:(ed2k|.torrent|peer_id=|announce|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=|magnet:|xunlei|sandai|Thunder|XLLiveUD|bt_key)",
-              "regexp:(.+.|^)(360|fast|so).(cn|com|net)",
+              "regexp:(.+.|^)(360).(cn|com|net)",
               "regexp:(.*.||)(guanjia.qq.com|qqpcmgr|QQPCMGR)",
               "regexp:(.*.||)(rising|kingsoft|duba|xindubawukong|jinshanduba).(com|net|org)",
               "regexp:(.*.||)(netvigator|torproject).(com|cn|net|org)",
