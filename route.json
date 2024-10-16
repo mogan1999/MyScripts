@@ -7,6 +7,30 @@
             "port": "25"
         },
         {
+        "type": "field",
+        "outboundTag": "IPv4_out",
+        "domain": [
+            "googleapis.cn",
+            "mihoyo.com",
+            "app-measurement.com",
+            "geetest.com",
+            "hoyoverse.com",
+            "gstatic.com",
+            "tiktok.com",
+            "tiktokcdn.com",
+            "tiktokv.com",
+            "ibytedtos.com",
+            "services.googleapis.cn",
+            "apple.com",
+            "apple.com.cn",
+            "www.microsoft.com",
+            "learn.microsoft.com",
+            "icloud.com",
+            "bing.com",
+            "icloud.com.cn"
+        ]
+        },
+        {
             "type": "field",
             "outboundTag": "block",
             "domain": [
@@ -32,29 +56,6 @@
               "regexp:(.*.||)(taobao).(com)",
               "regexp:(.*.||)(.*).(cn)"
             ]
-        },
-        {
-        "type": "field",
-        "outboundTag": "IPv4_out",
-        "domain": [
-            "mihoyo.com",
-            "app-measurement.com",
-            "geetest.com",
-            "hoyoverse.com",
-            "gstatic.com",
-            "tiktok.com",
-            "tiktokcdn.com",
-            "tiktokv.com",
-            "ibytedtos.com",
-            "services.googleapis.cn",
-            "apple.com",
-            "apple.com.cn",
-            "www.microsoft.com",
-            "learn.microsoft.com",
-            "icloud.com",
-            "bing.com",
-            "icloud.com.cn"
-        ]
         },
         {
             "type": "field",
