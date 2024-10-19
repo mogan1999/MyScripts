@@ -54,8 +54,7 @@
               "regexp:(.*.||)(gash).(com|tw)",
               "regexp:(.bank.)",
               "regexp:(.*.||)(pincong).(rocks)",
-              "regexp:(.*.||)(taobao).(com)",
-              "regexp:(.*.||)(.*).(cn)"
+              "regexp:(.*.||)(taobao).(com)"
             ]
         },
         {
