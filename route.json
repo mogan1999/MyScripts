@@ -54,14 +54,16 @@
               "regexp:(.*.||)(gash).(com|tw)",
               "regexp:(.bank.)",
               "regexp:(.*.||)(pincong).(rocks)",
-              "regexp:(.*.||)(taobao).(com)"
+              "regexp:(.*.||)(taobao).(com)",
+              "geosite:cn"
             ]
         },
         {
             "type": "field",
             "outboundTag": "block",
             "ip": [
-                "geoip:private"
+                "geoip:private",
+                "geoip:cn"
             ]
         },
         {
