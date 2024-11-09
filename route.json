@@ -30,7 +30,8 @@
             "icloud.com.cn",
             "line-apps.com",
             "securepubads.g.doubleclick.net",
-            "pagead2.googlesyndication.com"
+            "pagead2.googlesyndication.com",
+            "csp-reporting.cloudflare.com"
         ]
         },
         {
