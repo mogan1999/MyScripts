@@ -58,8 +58,7 @@
               "regexp:(.*.||)(gash).(com|tw)",
               "regexp:(.bank.)",
               "regexp:(.*.||)(pincong).(rocks)",
-              "regexp:(.*.||)(taobao).(com)",
-              "geosite:cn"
+              "regexp:(.*.||)(taobao).(com)"
             ]
         },
         {
