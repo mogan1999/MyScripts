@@ -31,7 +31,8 @@
             "line-apps.com",
             "securepubads.g.doubleclick.net",
             "pagead2.googlesyndication.com",
-            "csp-reporting.cloudflare.com"
+            "csp-reporting.cloudflare.com",
+            "dl.google.com"
         ]
         },
         {
