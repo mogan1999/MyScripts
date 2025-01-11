@@ -19,7 +19,3 @@ else
     echo "BBR 未启用。"
 fi
 
-# 检测是否可以手动启用BBR
-echo "运行以下命令以启用BBR（如果支持）："
-echo "sudo sysctl -w net.ipv4.tcp_congestion_control=bbr"
-echo "sudo sysctl -w net.core.default_qdisc=fq"
