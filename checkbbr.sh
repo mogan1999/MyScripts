@@ -1,6 +1,5 @@
 #!/bin/bash
 
-echo "检测VPS是否开启BBR..."
 
 # 检查内核版本是否支持BBR
 kernel_version=$(uname -r)
