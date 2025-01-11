@@ -15,6 +15,6 @@ bbr_enabled=$(lsmod | grep bbr)
 if [[ "$bbr_status" == "bbr" && -n "$bbr_enabled" ]]; then
     echo "BBR 已启用。"
 else
-    echo "BBR 未启用。"
+    echo "BBR 未启用!!!!!!"
 fi
 
