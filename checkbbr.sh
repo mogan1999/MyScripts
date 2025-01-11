@@ -15,15 +15,8 @@ bbr_enabled=$(lsmod | grep bbr)
 
 if [[ "$bbr_status" == "bbr" && -n "$bbr_enabled" ]]; then
     echo "BBR 已启用。"
-    echo "TCP 拥塞控制算法: $bbr_status"
-    echo "BBR 模块已加载。"
 else
     echo "BBR 未启用。"
-    echo "当前 TCP 拥塞控制算法: $bbr_status"
-    if [[ -z "$bbr_enabled" ]]; then
-        echo "BBR 模块未加载。"
-    fi
-    echo "建议检查并启用 BBR。"
 fi
 
 # 检测是否可以手动启用BBR
