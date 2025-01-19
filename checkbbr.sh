@@ -12,9 +12,8 @@ fi
 bbr_status=$(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')
 bbr_enabled=$(lsmod | grep bbr)
 
-if [[ "$bbr_status" == "bbr" && -n "$bbr_enabled" ]]; then
-    echo "BBR 已启用。"
-else
+if [[ "$bbr_status" != "bbr" || -z "$bbr_enabled" ]]; then
     echo "BBR 未启用!!!!!!"
 fi
+
 
