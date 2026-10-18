@@ -1,0 +1,21 @@
+[Unit]
+Description=Divert heavy Japanese Trojan uploaders by source IP
+Wants=haproxy.service
+After=haproxy.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/sbin/haproxy-jpe-upload.py --window 1800 --threshold 5000000000 --hold 86400 --interval 10
+Restart=on-failure
+RestartSec=5s
+StateDirectory=haproxy-jpe-upload
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
