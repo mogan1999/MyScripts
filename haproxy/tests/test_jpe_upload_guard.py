@@ -4,6 +4,7 @@ import io
 import os
 from pathlib import Path
 import re
+import signal
 import socket
 import ssl
 import subprocess
@@ -91,6 +92,29 @@ class LedgerTests(unittest.TestCase):
         self.sample(10, 600)
         self.assertEqual(self.sample(20, 400, epoch="2")[1], {IP: 1000})
 
+    def test_uploads_from_current_and_old_workers_accumulate(self):
+        self.ledger.advance_workers({"1": {IP: 0}}, 0)
+        active, created, _ = self.ledger.advance_workers({"1": {IP: 600}, "2": {IP: 400}}, 10)
+        self.assertEqual(created, {IP: 1000})
+        self.assertEqual(active[IP], 110)
+
+    def test_retired_worker_does_not_reset_surviving_worker_counter(self):
+        self.ledger.advance_workers({"1": {IP: 90000}, "2": {IP: 80000}}, 0)
+        self.ledger.advance_workers({"1": {IP: 90600}, "2": {IP: 80000}}, 10)
+        active, created, _ = self.ledger.advance_workers({"2": {IP: 80300}}, 20)
+        self.assertFalse(active)
+        self.assertFalse(created)
+        self.assertEqual(self.ledger.db.execute("SELECT SUM(bytes) FROM samples").fetchone()[0], 900)
+
+    def test_upgrade_keeps_legacy_baseline_without_importing_old_worker_history(self):
+        with self.ledger.db:
+            self.ledger.db.execute("INSERT INTO counters VALUES (?, 600, 10, '1')", (IP,))
+            self.ledger.db.execute("INSERT INTO samples VALUES (?, 10, 600)", (IP,))
+            self.ledger.db.execute("INSERT INTO sampling VALUES (1, 10)")
+        active, created, _ = self.ledger.advance_workers({"1": {IP: 1000}, "0": {IP: 100000000}}, 20)
+        self.assertEqual(created, {IP: 1000})
+        self.assertEqual(active[IP], 120)
+
     def test_restart_preserves_baseline_history_and_deadline(self):
         self.sample(0, 0)
         self.sample(10, 600)
@@ -116,7 +140,8 @@ class LedgerTests(unittest.TestCase):
 
 
 class FakeAPI:
-    def __init__(self):
+    def __init__(self, pid="123"):
+        self.pid = pid
         self.counters, self.marks, self.calls = {IP: 0}, {}, []
         self.fail_mark = False
 
@@ -128,7 +153,7 @@ class FakeAPI:
     def command(self, command):
         self.calls.append(command)
         if command == "show info":
-            return "Pid: 123\nVersion: 2.8.0"
+            return "Pid: %s\nVersion: 2.8.0" % self.pid
         if command == "show table " + ARGS.counter_table:
             return self.table(ARGS.counter_table, "bytes_in_cnt", self.counters)
         if command.startswith("show table " + ARGS.mark_table):
@@ -204,6 +229,39 @@ class EnforcementTests(unittest.TestCase):
     def test_unknown_table_is_rejected(self):
         with self.assertRaises(RuntimeError):
             guard.parse_table("No such table", "uploads", "bytes_in_cnt")
+
+    def test_marks_and_disconnections_apply_to_both_workers(self):
+        self.api.counters[IP] = 600
+        new_worker = FakeAPI("456")
+        new_worker.counters[IP] = 400
+        guard.tick_workers({"123": self.api, "456": new_worker}, self.ledger, ARGS, 10)
+        for api in (self.api, new_worker):
+            self.assertEqual(api.marks[IP], 1)
+            self.assertEqual([call for call in api.calls if call.startswith("shutdown")], ["shutdown session 0x1"])
+
+    def test_any_worker_mark_failure_prevents_disconnection_in_all_workers(self):
+        self.api.counters[IP] = 600
+        new_worker = FakeAPI("456")
+        new_worker.counters[IP] = 400
+        new_worker.fail_mark = True
+        with self.assertRaises(RuntimeError):
+            guard.tick_workers({"123": self.api, "456": new_worker}, self.ledger, ARGS, 10)
+        for api in (self.api, new_worker):
+            self.assertFalse(any(call.startswith("shutdown") for call in api.calls))
+        new_worker.fail_mark = False
+        guard.tick_workers({"123": self.api, "456": new_worker}, self.ledger, ARGS, 20)
+        for api in (self.api, new_worker):
+            self.assertIn("shutdown session 0x1", api.calls)
+
+    def test_master_worker_commands_always_include_the_source_pid(self):
+        master = SimpleNamespace(calls=[])
+        master.command = lambda command: master.calls.append(command)
+        api = guard.WorkerAPI(master, "456")
+        api.command("show sess")
+        api.command("shutdown session 0x1")
+        self.assertEqual(master.calls, ["@!456 show sess", "@!456 shutdown session 0x1"])
+        output = "10 master 0\n# workers\n11 worker 0\n# old workers\n12 worker 1\n# programs\n13 program 0"
+        self.assertEqual(guard.parse_workers(output), ["11", "12"])
 
 
 class TLSBackend:
@@ -291,6 +349,7 @@ class TLSIntegrationTests(unittest.TestCase):
                     return port
 
         self.port, self.socket_path = free_port(), str(root / "admin.sock")
+        self.master_socket = str(root / "master.sock")
         local_lines, section = [], ""
         for line in (HAPROXY_DIR / "all.cfg").read_text().splitlines():
             stripped = line.strip()
@@ -314,7 +373,10 @@ class TLSIntegrationTests(unittest.TestCase):
         binary = os.environ["HAPROXY_TEST_BINARY"]
         checked = subprocess.run([binary, "-c", "-f", str(config)], capture_output=True, text=True)
         self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
-        self.process = subprocess.Popen([binary, "-db", "-f", str(config)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        command = [binary, "-db", "-f", str(config)]
+        if sys.platform.startswith("linux"):
+            command += ["-W", "-S", self.master_socket]
+        self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.addCleanup(self.stop_haproxy)
         deadline = time.monotonic() + 5
         while not Path(self.socket_path).exists():
@@ -325,12 +387,14 @@ class TLSIntegrationTests(unittest.TestCase):
             time.sleep(0.02)
         self.ledgers = {}
         for name, args in self.profile_args.items():
+            args.socket, args.master_socket = self.socket_path, self.master_socket
             # 使用 CLI 为此 profile 选择的文件名，验证运行实例的状态相互独立。
             self.ledgers[name] = guard.Ledger(root / args.state_db.name, threshold=131072, hold=60)
             self.addCleanup(self.ledgers[name].close)
             checked = subprocess.run([
                 sys.executable, str(HAPROXY_DIR / "jpe_upload_guard.py"),
                 "--profile", name, "--socket", self.socket_path, "--check",
+                "--master-socket", self.master_socket if sys.platform.startswith("linux") else "",
             ], capture_output=True, text=True)
             self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -446,6 +510,65 @@ class TLSIntegrationTests(unittest.TestCase):
             self.connect(name.encode(), sni=sni)
             self.ping(diverted[name])
         self.ping(fallback)
+        self.ping(other_sni)
+        self.ping(other_ip)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "master CLI reload test requires Linux")
+    def test_reload_keeps_old_connections_counted_and_diverted(self):
+        args, ledger = self.profile_args["trojan-jpe"], self.ledgers["trojan-jpe"]
+        old = self.connect(b"trojan-jpe")
+        other_sni = self.connect(b"other", sni="hk.sswnat.com")
+        other_ip = self.connect(b"trojan-jpe", host="::1")
+        with guard.worker_apis(args) as apis:
+            guard.tick_workers(apis, ledger, args, 1000)
+        old.sendall(b"U" * 80000)
+        self.wait_for_counter(lambda api: guard.parse_table(
+            api.command("show table " + args.counter_table), args.counter_table, "bytes_in_cnt"
+        ).get(guard.ip_key("127.0.0.1"), 0) >= 80000)
+        with guard.worker_apis(args) as apis:
+            guard.tick_workers(apis, ledger, args, 1010)
+        self.assertFalse(ledger.db.execute("SELECT * FROM diversions").fetchall())
+
+        self.process.send_signal(signal.SIGUSR2)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            try:
+                with guard.worker_apis(args) as apis:
+                    if len(apis) >= 2:
+                        for api in apis.values():
+                            guard.parse_table(api.command("show table " + args.counter_table), args.counter_table, "bytes_in_cnt")
+                        break
+            except (OSError, RuntimeError):
+                pass
+            time.sleep(0.1)
+        else:
+            self.fail("Reload did not expose current and old HAProxy workers")
+
+        new = self.connect(b"trojan-jpe")
+        new.sendall(b"U" * 80000)
+        deadline = time.monotonic() + 7
+        while time.monotonic() < deadline:
+            with guard.worker_apis(args) as apis:
+                uploaded = sum(guard.parse_table(
+                    api.command("show table " + args.counter_table), args.counter_table, "bytes_in_cnt"
+                ).get(guard.ip_key("127.0.0.1"), 0) for api in apis.values())
+            if uploaded >= 160000:
+                break
+            time.sleep(0.2)
+        else:
+            self.fail("Uploads in both workers did not refresh")
+
+        with guard.worker_apis(args) as apis:
+            guard.tick_workers(apis, ledger, args, 1020)
+        self.assertEqual(old.recv(100), b"")
+        self.assertEqual(new.recv(100), b"")
+        diverted = self.connect(b"trojan-jpe-upload")
+        self.ping(other_sni)
+        self.ping(other_ip)
+        with guard.worker_apis(args) as apis:
+            guard.tick_workers(apis, ledger, args, 1100)
+        self.connect(b"trojan-jpe")
+        self.ping(diverted)
         self.ping(other_sni)
         self.ping(other_ip)
 
