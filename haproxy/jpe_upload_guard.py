@@ -2,9 +2,11 @@
 """按公网 IP 的滚动上传量分流指定 Naive / Trojan 入口；只依赖 Python 标准库。"""
 
 import argparse
+from contextlib import contextmanager
 import fcntl
 import ipaddress
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import re
@@ -14,6 +16,7 @@ import time
 
 
 LOG = logging.getLogger("jpe-upload-guard")
+CLI_PROMPT = re.compile(rb"(?:^|\n)(?:master|\d+)?> $")
 
 # 每个入口使用独立的计数表、标记表和数据库；保留原日本 Trojan 的默认状态文件。
 PROFILES = {
@@ -70,12 +73,44 @@ class RuntimeAPI:
             raise ValueError("Runtime API command must be a single command")
         self.sock.sendall((command + "\n").encode("ascii"))
         chunks = bytearray()
-        while not (chunks == b"> " or chunks.endswith(b"\n> ")):
+        while True:
+            prompt = CLI_PROMPT.search(chunks)
+            if prompt:
+                return chunks[:prompt.start()].decode("utf-8").strip()
             data = self.sock.recv(65536)
             if not data:
                 raise RuntimeError("HAProxy closed the Runtime API connection")
             chunks.extend(data)
-        return chunks[:-2].decode("utf-8").strip()
+
+
+class WorkerAPI:
+    """每条命令都指定实际 PID，session 指针只交给它所属的 worker。"""
+
+    def __init__(self, master, pid):
+        self.master, self.pid = master, str(int(pid))
+
+    def command(self, command):
+        return self.master.command("@!%s %s" % (self.pid, command))
+
+
+def parse_workers(output):
+    workers = re.findall(r"^(\d+)\s+worker\s", output, re.MULTILINE)
+    if not workers:
+        raise RuntimeError("Master CLI did not return any HAProxy workers")
+    return workers
+
+
+@contextmanager
+def worker_apis(args):
+    if args.master_socket and Path(args.master_socket).exists():
+        with RuntimeAPI(args.master_socket) as master:
+            yield {pid: WorkerAPI(master, pid) for pid in parse_workers(master.command("show proc"))}
+    else:
+        with RuntimeAPI(args.socket) as api:
+            info = dict(re.findall(r"^(\w+): (.*)$", api.command("show info"), re.MULTILINE))
+            if "Pid" not in info:
+                raise RuntimeError("Runtime API did not return a HAProxy PID")
+            yield {info["Pid"]: api}
 
 
 def parse_table(output, name, field):
@@ -128,48 +163,75 @@ class Ledger:
             CREATE TABLE IF NOT EXISTS sampling (
                 id INTEGER PRIMARY KEY, observed_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS worker_counters (
+                worker TEXT NOT NULL, ip TEXT NOT NULL, value INTEGER NOT NULL,
+                observed_at REAL NOT NULL, PRIMARY KEY(worker, ip)
+            );
         """)
 
     def close(self):
         self.db.close()
 
     def advance(self, counters, epoch, now):
+        return self.advance_workers({str(epoch): counters}, now)
+
+    def advance_workers(self, workers, now):
         with self.db:
             holds = dict(self.db.execute("SELECT ip, expires_at FROM diversions"))
             expired = {ip for ip, expiry in holds.items() if expiry <= now}
             active = {ip: expiry for ip, expiry in holds.items() if expiry > now}
             previous = {
-                ip: (value, seen, old_epoch)
-                for ip, value, seen, old_epoch in self.db.execute("SELECT * FROM counters")
+                (worker, ip): (value, seen)
+                for worker, ip, value, seen in self.db.execute("SELECT * FROM worker_counters")
             }
             previous_poll = self.db.execute("SELECT observed_at FROM sampling WHERE id = 1").fetchone()
             recent_poll = previous_poll and 0 <= now - previous_poll[0] <= self.interval * 3
+            migrated = self.db.execute("SELECT 1 FROM sampling WHERE id = 2").fetchone()
+            if not migrated:
+                # 从旧版本升级时沿用当前 worker 的基线；其他旧 worker 先建基线。
+                previous.update({
+                    (epoch, ip): (value, seen)
+                    for ip, value, seen, epoch in self.db.execute("SELECT * FROM counters")
+                    if epoch in workers
+                })
             self.db.execute("DELETE FROM samples WHERE observed_at <= ?", (now - self.window,))
             self.db.execute("DELETE FROM diversions WHERE expires_at <= ?", (now,))
             # 分流期间不累加配额；到期恢复后从新基线开始，避免立刻再次分流。
             self.db.executemany("DELETE FROM samples WHERE ip = ?", [(ip,) for ip in expired])
             increments = []
-            for ip, value in counters.items():
-                baseline = previous.get(ip)
-                if ip not in active and ip not in expired:
-                    delta = 0
-                    if baseline:
-                        old_value, seen, old_epoch = baseline
-                        if 0 <= now - seen <= self.interval * 3:
-                            delta = value - old_value if old_epoch == epoch and value >= old_value else value
-                    elif recent_poll:
-                        # 启动后的新 IP 是新建表项，其首次采样前的上传也要计入。
-                        delta = value
-                    # 长时间停采无法确定字节的发生时间，重新建基线以免误判。
-                    if delta:
-                        increments.append((ip, now, delta))
+            counters = {}
+            for worker, values in workers.items():
+                for ip, value in values.items():
+                    counters[ip] = counters.get(ip, 0) + value
+                    baseline = previous.get((worker, ip))
+                    if ip not in active and ip not in expired:
+                        delta = 0
+                        if baseline:
+                            old_value, seen = baseline
+                            if 0 <= now - seen <= self.interval * 3:
+                                delta = value - old_value if value >= old_value else value
+                        elif recent_poll and migrated:
+                            # 正常轮询中出现的新 IP / 新 worker，其首批上传也计入。
+                            delta = value
+                        if delta:
+                            increments.append((ip, now, delta))
             self.db.executemany("INSERT INTO samples VALUES (?, ?, ?)", increments)
+            self.db.execute("DELETE FROM worker_counters WHERE observed_at < ?", (now - self.window,))
+            self.db.executemany(
+                "INSERT OR REPLACE INTO worker_counters VALUES (?, ?, ?, ?)",
+                [(worker, ip, value, now) for worker, values in workers.items() for ip, value in values.items()],
+            )
+            # 旧 worker 退出只移除它的基线，绝不把其他 worker 的总数当作新增上传。
+            for (worker,) in self.db.execute("SELECT DISTINCT worker FROM worker_counters").fetchall():
+                if worker not in workers:
+                    self.db.execute("DELETE FROM worker_counters WHERE worker = ?", (worker,))
             self.db.executemany(
                 "INSERT OR REPLACE INTO counters VALUES (?, ?, ?, ?)",
-                [(ip, value, now, epoch) for ip, value in counters.items()],
+                [(ip, value, now, ",".join(sorted(workers))) for ip, value in counters.items()],
             )
             self.db.execute("DELETE FROM counters WHERE observed_at < ?", (now - self.window,))
             self.db.execute("INSERT OR REPLACE INTO sampling VALUES (1, ?)", (now,))
+            self.db.execute("INSERT OR REPLACE INTO sampling VALUES (2, ?)", (now,))
             created = {}
             for ip, uploaded in self.db.execute(
                 "SELECT ip, SUM(bytes) FROM samples GROUP BY ip HAVING SUM(bytes) >= ?",
@@ -190,15 +252,25 @@ class Ledger:
             self.db.execute("INSERT OR REPLACE INTO diversions VALUES (?, 0)", (ip,))
             self.db.execute("DELETE FROM samples WHERE ip = ?", (ip,))
             self.db.execute("DELETE FROM counters WHERE ip = ?", (ip,))
+            self.db.execute("DELETE FROM worker_counters WHERE ip = ?", (ip,))
 
 
 def tick(api, ledger, args, now):
     info = dict(re.findall(r"^(\w+): (.*)$", api.command("show info"), re.MULTILINE))
     if "Pid" not in info:
         raise RuntimeError("Runtime API did not return a HAProxy PID")
-    counters = parse_table(api.command("show table " + args.counter_table), args.counter_table, "bytes_in_cnt")
-    marks = parse_table(api.command("show table " + args.mark_table), args.mark_table, "gpc0")
-    desired, created, expired = ledger.advance(counters, info["Pid"], now)
+    tick_workers({info["Pid"]: api}, ledger, args, now)
+
+
+def tick_workers(apis, ledger, args, now):
+    counters, worker_marks = {}, {}
+    for pid, api in apis.items():
+        info = dict(re.findall(r"^(\w+): (.*)$", api.command("show info"), re.MULTILINE))
+        if info.get("Pid") != pid:
+            raise RuntimeError("Runtime API returned a different worker PID")
+        counters[pid] = parse_table(api.command("show table " + args.counter_table), args.counter_table, "bytes_in_cnt")
+        worker_marks[pid] = parse_table(api.command("show table " + args.mark_table), args.mark_table, "gpc0")
+    desired, created, expired = ledger.advance_workers(counters, now)
 
     for ip in expired:
         LOG.info("restore %s backend=%s after hold expired or manual release", display_ip(ip), args.backend)
@@ -206,35 +278,39 @@ def tick(api, ledger, args, now):
         LOG.info("divert %s backend=%s: rolling upload=%d bytes, hold=%ds", display_ip(ip), args.backend, uploaded, ledger.hold)
 
     # 先持久化决策，再设置并确认标记，最后断开旧连接；任一步失败都会重试。
-    for ip, flag in marks.items():
-        if flag and ip not in desired:
-            response = api.command("clear table %s key %s" % (args.mark_table, ip))
-            if response:
-                raise RuntimeError(response)
-    for ip in desired:
-        if marks.get(ip) != 1:
-            response = api.command("set table %s key %s data.gpc0 1" % (args.mark_table, ip))
-            if response:
-                raise RuntimeError(response)
-            confirmed = parse_table(
-                api.command("show table %s key %s" % (args.mark_table, ip)), args.mark_table, "gpc0"
-            )
-            if confirmed.get(ip) != 1:
-                raise RuntimeError("Could not confirm diversion mark for " + display_ip(ip))
+    for pid, api in apis.items():
+        marks = worker_marks[pid]
+        for ip, flag in marks.items():
+            if flag and ip not in desired:
+                response = api.command("clear table %s key %s" % (args.mark_table, ip))
+                if response:
+                    raise RuntimeError(response)
+        for ip in desired:
+            if marks.get(ip) != 1:
+                response = api.command("set table %s key %s data.gpc0 1" % (args.mark_table, ip))
+                if response:
+                    raise RuntimeError(response)
+                confirmed = parse_table(
+                    api.command("show table %s key %s" % (args.mark_table, ip)), args.mark_table, "gpc0"
+                )
+                if confirmed.get(ip) != 1:
+                    raise RuntimeError("Could not confirm diversion mark for " + display_ip(ip))
     if desired:
-        sessions = list(parse_sessions(api.command("show sess"), args.frontend, args.backend, desired))
-        for session, ip in sessions:
-            response = api.command("shutdown session " + session)
-            if response and "No such session" not in response:
-                raise RuntimeError(response)
-            if not response:
-                LOG.info("disconnect %s session=%s backend=%s", display_ip(ip), session, args.backend)
+        for pid, api in apis.items():
+            sessions = list(parse_sessions(api.command("show sess"), args.frontend, args.backend, desired))
+            for session, ip in sessions:
+                response = api.command("shutdown session " + session)
+                if response and "No such session" not in response:
+                    raise RuntimeError(response)
+                if not response:
+                    LOG.info("disconnect %s worker=%s session=%s backend=%s", display_ip(ip), pid, session, args.backend)
 
 
 def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=PROFILES, default="trojan-jpe", help="monitored entry (default: trojan-jpe)")
     parser.add_argument("--socket", default="/run/haproxy/admin.sock")
+    parser.add_argument("--master-socket", help="master CLI for current and old workers; auto-detected for the default socket")
     parser.add_argument("--state-db", type=Path, help="override the profile's independent state database")
     parser.add_argument("--counter-table", help="override the profile's upload counter table")
     parser.add_argument("--mark-table", help="override the profile's diversion mark table")
@@ -250,6 +326,8 @@ def arguments(argv=None):
     modes.add_argument("--release", metavar="IP", help="queue release; daemon applies it at the next poll")
     modes.add_argument("--once", action="store_true", help="run one sampling / enforcement cycle")
     args = parser.parse_args(argv)
+    if args.master_socket is None:
+        args.master_socket = "/run/haproxy-master.sock" if args.socket == "/run/haproxy/admin.sock" else ""
     counter_table, mark_table, backend, state_file = PROFILES[args.profile]
     args.counter_table = args.counter_table or counter_table
     args.mark_table = args.mark_table or mark_table
@@ -272,10 +350,11 @@ def main():
     args = arguments()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.check:
-        with RuntimeAPI(args.socket) as api:
-            parse_table(api.command("show table " + args.counter_table), args.counter_table, "bytes_in_cnt")
-            parse_table(api.command("show table " + args.mark_table), args.mark_table, "gpc0")
-            print("%s: Runtime API and IPv4/IPv6 upload / diversion tables are ready" % args.profile)
+        with worker_apis(args) as apis:
+            for api in apis.values():
+                parse_table(api.command("show table " + args.counter_table), args.counter_table, "bytes_in_cnt")
+                parse_table(api.command("show table " + args.mark_table), args.mark_table, "gpc0")
+            print("%s: IPv4/IPv6 upload / diversion tables are ready in %d worker(s)" % (args.profile, len(apis)))
         return 0
 
     os.umask(0o077)
@@ -287,6 +366,15 @@ def main():
             print("Release queued for %s; applied at the next daemon poll" % display_ip(args.release))
             return 0
         if args.status:
+            poll = ledger.db.execute("SELECT observed_at FROM sampling WHERE id = 1").fetchone()
+            print("profile=%s sample_age_seconds=%s window=%ds threshold=%d bytes" % (
+                args.profile, "unknown" if not poll else max(0, int(time.time() - poll[0])), args.window, args.threshold,
+            ))
+            for ip, uploaded in ledger.db.execute(
+                "SELECT ip, SUM(bytes) FROM samples WHERE observed_at > ? GROUP BY ip ORDER BY SUM(bytes) DESC LIMIT 10",
+                (time.time() - args.window,),
+            ):
+                print("%s recent_upload_bytes=%d" % (display_ip(ip), uploaded))
             for ip, expiry in ledger.db.execute("SELECT ip, expires_at FROM diversions ORDER BY expires_at"):
                 print("%s remaining_seconds=%d" % (display_ip(ip), max(0, expiry - time.time())))
             return 0
@@ -295,6 +383,12 @@ def main():
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise RuntimeError("Another monitor is already using this state database")
+            try:
+                handler = RotatingFileHandler(args.state_db.with_suffix(".log"), maxBytes=1048576, backupCount=3)
+                handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+                logging.getLogger().addHandler(handler)
+            except OSError as exc:
+                LOG.warning("Could not open bounded event log: %s", exc)
             LOG.info(
                 "monitor started: profile=%s backend=%s window=%ds threshold=%d bytes hold=%ds",
                 args.profile, args.backend, args.window, args.threshold, args.hold,
@@ -302,8 +396,8 @@ def main():
             while True:
                 started = time.monotonic()
                 try:
-                    with RuntimeAPI(args.socket) as api:
-                        tick(api, ledger, args, time.time())
+                    with worker_apis(args) as apis:
+                        tick_workers(apis, ledger, args, time.time())
                 except (OSError, RuntimeError, ValueError) as exc:
                     LOG.error("sampling / enforcement failed: %s", exc)
                     if args.once:

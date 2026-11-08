@@ -11,7 +11,7 @@
 
 `bytes_in_cnt` 统计客户端 → HAProxy → 后端的字节，包含 TLS / VPN 封装开销；服务器 → 客户端的下载字节不计入。下载时客户端发送的少量协议数据仍算上传。共享公网 IP 的用户合并统计，IPv4 和 IPv6 均支持。
 
-HAProxy 的 TCP / TLS 透传连接不能中途迁移。四个监控实例复用 `jpe_upload_guard.py`，每 10 秒采样一次，分别用 SQLite 保存最近 30 分钟的上传增量和分流到期时间。触发后先写入并确认分流标记，再通过 Runtime API 逐个断开该 IP 在 `reality_in` / 对应原后端的旧连接，客户端重连时进入专用后端。该 IP 使用其他 SNI 的连接和已经进入专用后端的连接不会因此断开。
+HAProxy 的 TCP / TLS 透传连接不能中途迁移。四个监控实例复用 `jpe_upload_guard.py`，每 10 秒采样一次，分别用 SQLite 保存最近 30 分钟的上传增量和分流到期时间。存在 `/run/haproxy-master.sock` 时，监控通过 master CLI 读取当前及旧 worker，按 worker 保存基线后合计上传增量。触发后先在所有 worker 中写入并确认分流标记，再逐个断开该 IP 在 `reality_in` / 对应原后端的旧连接，客户端重连时进入专用后端。该 IP 使用其他 SNI 的连接和已经进入专用后端的连接不会因此断开。
 
 默认兜底使用独立的 `bk_naive_sg_fallback` 后端，仍指向原来的五个新加坡节点；兜底连接的上传不计入 `sg.sswnat.com`，也不会在这个入口触发分流时被断开。
 
@@ -52,7 +52,13 @@ sudo journalctl -u haproxy-upload@naive-jpe.service -f
 sudo journalctl -u haproxy-upload@trojan-sg.service -f
 sudo journalctl -u haproxy-upload@naive-sg.service -f
 
-# 查看日本 Trojan 的分流剩余秒数（默认 profile 保持不变）
+# 分流事件另存为独立日志，不受 HAProxy 连接日志挤占 journal 的影响。
+sudo tail -n 50 /var/lib/haproxy-jpe-upload/state.log
+sudo tail -n 50 /var/lib/haproxy-jpe-upload/naive-jpe.log
+sudo tail -n 50 /var/lib/haproxy-jpe-upload/trojan-sg.log
+sudo tail -n 50 /var/lib/haproxy-jpe-upload/naive-sg.log
+
+# 查看采样距今秒数、最近窗口内上传最多的 IP，以及分流剩余秒数。
 sudo python3 /usr/local/sbin/haproxy-jpe-upload.py --status
 
 # 指定入口查看或提前解除，下一次采样时应用
@@ -63,9 +69,13 @@ sudo python3 /usr/local/sbin/haproxy-jpe-upload.py --profile naive-sg --release 
 
 阈值、窗口、保留时间和采样间隔由 service 的 `ExecStart` 参数指定，当前为 `--window 1800 --threshold 5000000000 --hold 86400 --interval 10`。修改原服务或模板服务后，执行 `systemctl daemon-reload` 并重启对应实例。如果需要 5GiB，把 `--threshold` 改为 `5368709120`。程序保留 `--counter-table`、`--mark-table`、`--backend` 和 `--state-db` 参数，支持覆盖 profile 的默认值。
 
+`all.cfg` 使用 `option dontlog-normal`：成功且没有超时、重试等异常的连接不写连接日志，异常连接及 HAProxy 运行错误仍可诊断。上传统计与连接日志独立，因此不会影响分流。四个监控实例各自的事件日志最多 1MiB，保留 3 份轮转文件，合计最多约 16MiB；同样继续输出到 systemd journal。
+
 监控重启后会继续使用已保存的历史和原有到期时间；HAProxy 重启后会重新建立缺失的分流标记。第一次启动监控时从当前字节计数建立基线，无法追溯之前 30 分钟的上传。停采超过 3 个采样间隔后重新建立基线，避免把停采期间的历史上传全部误算进最近 30 分钟。
 
-HAProxy 重启 / 重载时最后一次采样之后的旧进程上传可能漏计；平滑重载后仍留在旧 worker 的连接不在新 worker 的管理 socket 中，须等旧连接重连后才能继续统计和断开。此配置没有新增 peers / master CLI 的跨进程同步。多台 HAProxy 的上传量也各自独立统计。
+平滑重载后旧 worker 的长连接仍会被监控；旧 worker 退出不会把其他 worker 的累计计数误算成新增上传。升级旧版本时沿用已有计数基线、窗口历史和分流到期时间，对以前不可见的旧 worker 从升级后的第一轮建立基线。硬重启时旧进程退出前最后一个采样间隔的上传仍可能漏计。多台 HAProxy 的上传量各自独立统计。
+
+master CLI 的位置可用 `--master-socket /path/to/master.sock` 指定；它由 HAProxy 的 `-S` 启动参数提供。默认 master socket 不存在时回退到原来的 admin socket，这种情况下只能管理它对应的 worker。指定自定义 `--socket` 时不会自动使用生产 master socket，需同时指定 `--master-socket` 才启用跨 worker 监控。
 
 ## 验证
 
@@ -74,4 +84,4 @@ python3 -m unittest discover -s haproxy/tests -v
 HAPROXY_TEST_BINARY=/path/to/haproxy python3 -m unittest discover -s haproxy/tests -v
 ```
 
-第一条运行滚动窗口、上传方向、持久化、计数重置和断线范围测试。第二条还运行四个入口的本机 TLS 透传测试：下载不会触发、同一 IP 在各入口独立触发、重连进入对应专用节点、其他入口和默认兜底连接继续工作，以及到期恢复。测试后端只绑定本机回环地址。
+第一条运行滚动窗口、上传方向、持久化、计数重置、版本升级和多 worker 断线范围测试。第二条还运行四个入口的本机 TLS 透传测试：下载不会触发、同一 IP 在各入口独立触发、重连进入对应专用节点、其他入口和默认兜底连接继续工作，以及到期恢复。Linux 下还会真实重载 HAProxy，验证新旧 worker 上传合计及旧连接断开。测试后端只绑定本机回环地址。
